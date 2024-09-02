@@ -48,69 +48,48 @@ int main(int argc, char** argv)
  * doit - handle one HTTP request/response transaction
  */
  /* $begin doit */
-void doit(int fd) 
+void doit(int fd)
 {
     int is_static;
     struct stat sbuf;
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+    char server[MAXLINE];
     char filename[MAXLINE], cgiargs[MAXLINE];
-    rio_t rio;
+    rio_t rio,server_rio;
 
     /* Read request line and headers */
     Rio_readinitb(&rio, fd);
-    if (!Rio_readlineb(&rio, buf, MAXLINE))  //line:netp:doit:readrequest
+    Rio_readlineb(&rio, buf, MAXLINE);
+    sscanf(buf, "%s %s %s", method, uri, version);
+
+    if (strcasecmp(method, "GET"))
+    {
+        printf("Proxy does not implement the method");
         return;
-    printf("%s", buf);
-    sscanf(buf, "%s %s %s", method, uri, version);       //line:netp:doit:parserequest
-    if (strcasecmp(method, "GET")) {                     //line:netp:doit:beginrequesterr
-        clienterror(fd, method, "501", "Not Implemented",
-                    "Tiny does not implement this method");
+    }
+
+    struct Uri* uri_data = (struct Uri*)malloc(sizeof(struct Uri));
+    parse_uri(uri, uri_data);
+    bulid_header(server, uri_data, &rio);
+
+    int serverfd = Open_clientfd(uri_data->host, uri_data->port);
+    if (serverfd < 0)
+    {
+        print("connection failed\n");
         return;
-    }                                                    //line:netp:doit:endrequesterr
-    read_requesthdrs(&rio);                              //line:netp:doit:readrequesthdrs
-
-    /* Parse URI from GET request */
-    is_static = parse_uri(uri, filename, cgiargs);       //line:netp:doit:staticcheck
-    if (stat(filename, &sbuf) < 0) {                     //line:netp:doit:beginnotfound
-	clienterror(fd, filename, "404", "Not found",
-		    "Tiny couldn't find this file");
-	return;
-    }                                                    //line:netp:doit:endnotfound
-
-    if (is_static) { /* Serve static content */          
-	if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) { //line:netp:doit:readable
-	    clienterror(fd, filename, "403", "Forbidden",
-			"Tiny couldn't read the file");
-	    return;
-	}
-	serve_static(fd, filename, sbuf.st_size);        //line:netp:doit:servestatic
     }
-    else { /* Serve dynamic content */
-	if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) { //line:netp:doit:executable
-	    clienterror(fd, filename, "403", "Forbidden",
-			"Tiny couldn't run the CGI program");
-	    return;
-	}
-	serve_dynamic(fd, filename, cgiargs);            //line:netp:doit:servedynamic
-    }
-}
-/* $end doit */
 
-/*
- * read_requesthdrs - read HTTP request headers
- */
-/* $begin read_requesthdrs */
-void read_requesthdrs(rio_t *rp) 
-{
-    char buf[MAXLINE];
+    Rio_readinitb(&server_rio, serverfd);
+    Rio_writen(serverfd, server, strlen(server));
 
-    Rio_readlineb(rp, buf, MAXLINE);
-    printf("%s", buf);
-    while(strcmp(buf, "\r\n")) {          //line:netp:readhdrs:checkterm
-	Rio_readlineb(rp, buf, MAXLINE);
-	printf("%s", buf);
+    size_t n;
+
+    while ((n = Rio_readlineb(&server_rio, buf, MAXLINE)) != 0)
+    {
+        printf("proxy received %d bytes,then send\n", (int)n);
+        Rio_writen(connfd, buf, n);
     }
-    return;
+    Close(serverfd);
 }
 /* $end doit */
 
